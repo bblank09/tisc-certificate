@@ -26,6 +26,7 @@
     <div id="formError" class="error hidden" role="alert" tabindex="-1"></div>
     <form id="certificateForm" novalidate>
       <div class="form-card">
+        <div class="form-field"><label for="teamSearch">Search team</label><input id="teamSearch" type="search" placeholder="Type part of your team name" autocomplete="off" aria-controls="team" aria-describedby="loadStatus" disabled></div>
         <div class="form-field"><label for="team">Team</label><select id="team" disabled aria-describedby="loadStatus"><option value="">Select a team</option></select><p id="loadStatus" class="load-status" role="status">Loading teams…</p></div>
         <div class="form-field"><label for="person">Your name</label><select id="person" disabled><option value="">Select your name</option></select></div>
         <div class="form-field"><label for="surname">Surname</label><input id="surname" type="text" maxlength="100" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Enter your surname" aria-describedby="surnameHint"><p id="surnameHint" class="hint">Enter the last part of your name as registered, for example Smith for Jane Smith.</p></div>
@@ -46,7 +47,7 @@
 <script>
 (function(){
   'use strict';
-  var $=function(id){return document.getElementById(id);},session=null,blobUrl='',timer=null,version=0;
+  var $=function(id){return document.getElementById(id);},session=null,blobUrl='',timer=null,version=0,allTeams=[];
   function text(id,value){$(id).textContent=value;}
   function error(id,msg){text(id,msg);$(id).classList.remove('hidden');$(id).focus();}
   function clear(id){text(id,'');$(id).classList.add('hidden');}
@@ -60,9 +61,17 @@
   function reset(expired){
     var old=session;session=null;version++;clearTimeout(timer);releaseFile();$('surname').value='';$('person').value='';$('loadFile').disabled=false;text('loadFile','Prepare download');$('submit').disabled=!$('person').options.length;show('form');if(old)call('logout',[old.token],function(){},function(){});if(expired)error('formError','Your session has expired. Please verify your details again.');
   }
+  function searchKey(value){return String(value||'').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/\s+/g,' ').trim().toLowerCase();}
+  function filterTeams(){
+    var previous=$('team').value,query=searchKey($('teamSearch').value),matches=allTeams.filter(function(t){return searchKey(t.name).indexOf(query)!==-1;});
+    $('team').replaceChildren(option('','Select a team'));matches.forEach(function(t){$('team').appendChild(option(t.id,t.name+' · '+t.track));});$('team').disabled=!matches.length;
+    if(previous&&matches.some(function(t){return t.id===previous;}))$('team').value=previous;
+    else if(previous){version++;$('person').replaceChildren(option('','Select your name'));$('person').disabled=true;$('submit').disabled=true;$('surname').value='';}
+    text('loadStatus',!allTeams.length?'Certificates are not available yet. Please contact the organizing team.':matches.length?(query?matches.length+' of '+allTeams.length+' teams match':allTeams.length+' teams available'):'No teams match your search. Try another name or clear the search.');
+  }
+  $('teamSearch').oninput=filterTeams;
   call('getTeams',[],function(teams){
-    $('team').replaceChildren(option('','Select a team'));teams.forEach(function(t){$('team').appendChild(option(t.id,t.name+' · '+t.track));});$('team').disabled=!teams.length;
-    text('loadStatus',teams.length?teams.length+' teams available':'Certificates are not available yet. Please contact the organizing team.');
+    allTeams=teams;$('teamSearch').disabled=!teams.length;filterTeams();
   },function(msg){text('loadStatus','Unable to load teams');error('formError',msg);});
   $('team').onchange=function(){
     var team=this.value;version++;$('person').replaceChildren(option('','Select your name'));$('person').disabled=true;$('submit').disabled=true;$('surname').value='';clear('formError');if(!team)return;
@@ -71,8 +80,8 @@
   $('certificateForm').onsubmit=function(e){
     e.preventDefault();clear('formError');var team=$('team').value,id=$('person').value,surname=$('surname').value.trim();
     if(!team||!id||!surname){error('formError','Please select your team and name, and enter your surname.');return;}
-    var request=++version;$('submit').disabled=true;$('team').disabled=true;$('person').disabled=true;text('submit','Verifying…');
-    function done(){text('submit','View my certificate');$('submit').disabled=false;$('team').disabled=false;$('person').disabled=false;$('surname').value='';}
+    var request=++version;$('submit').disabled=true;$('teamSearch').disabled=true;$('team').disabled=true;$('person').disabled=true;text('submit','Verifying…');
+    function done(){text('submit','View my certificate');$('submit').disabled=false;$('teamSearch').disabled=false;$('team').disabled=false;$('person').disabled=false;$('surname').value='';}
     call('verifyParticipant',[team,id,surname],function(res){if(request!==version)return;done();if(!res.ok){error('formError',res.message);return;}session=res;releaseFile();clear('downloadError');text('resultName',res.name);text('resultTeam',res.team+' · '+res.track);text('resultRound',res.round);text('downloadStatus','Your session expires after 10 minutes. Only your own certificate is available.');$('loadFile').disabled=false;text('loadFile','Prepare download');show('result');clearTimeout(timer);timer=setTimeout(function(){reset(true);},Math.max(0,res.expiresAt-Date.now()));},function(msg){if(request!==version)return;done();error('formError',msg);});
   };
   $('loadFile').onclick=function(){
