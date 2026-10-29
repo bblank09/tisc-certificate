@@ -16,6 +16,7 @@
     @media(max-width:350px){.summary{grid-template-columns:1fr 1fr}.summary div:last-child{grid-column:1/-1}}
 
 .download-link{display:inline-flex;align-items:center;justify-content:center;min-height:52px;padding:12px 20px;border-radius:9px;background:#1d4f85;color:#fff;text-decoration:none;font-weight:700}.help a{color:#1d4f85}.actions .download-link{flex:1 1 220px}#downloadError{margin-top:18px}#result h1{font-size:clamp(28px,5vw,42px)}
+.team-picker{position:relative}.team-options{position:absolute;z-index:20;top:calc(100% + 5px);left:0;right:0;max-height:260px;overflow-y:auto;background:#fff;border:1px solid #9fb3c7;border-radius:8px;box-shadow:0 8px 24px #142c4920}.team-options button{display:block;width:100%;text-align:left;white-space:normal;border-radius:0;background:#fff;color:#142c49;font-weight:400;min-height:48px;padding:12px 15px}.team-options button:hover,.team-options button.active-option{background:#eaf3fc;color:#142c49}.team-empty{padding:14px;color:#536b85}
 </style>
 </head>
 <body>
@@ -26,8 +27,7 @@
     <div id="formError" class="error hidden" role="alert" tabindex="-1"></div>
     <form id="certificateForm" novalidate>
       <div class="form-card">
-        <div class="form-field"><label for="teamSearch">Search team</label><input id="teamSearch" type="search" placeholder="Type part of your team name" autocomplete="off" aria-controls="team" aria-describedby="loadStatus" disabled></div>
-        <div class="form-field"><label for="team">Team</label><select id="team" disabled aria-describedby="loadStatus"><option value="">Select a team</option></select><p id="loadStatus" class="load-status" role="status">Loading teams…</p></div>
+        <div class="form-field"><label for="team">Team</label><div id="teamPicker" class="team-picker"><input id="team" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="teamList" aria-describedby="loadStatus" placeholder="Select or search your team" autocomplete="off" disabled><div id="teamList" class="team-options hidden" role="listbox" aria-label="Teams"></div></div><p id="loadStatus" class="load-status" role="status">Loading teams…</p></div>
         <div class="form-field"><label for="person">Your name</label><select id="person" disabled><option value="">Select your name</option></select></div>
         <div class="form-field"><label for="surname">Surname</label><input id="surname" type="text" maxlength="100" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Enter your surname" aria-describedby="surnameHint"><p id="surnameHint" class="hint">Enter the last part of your name as registered, for example Smith for Jane Smith.</p></div>
         <div class="actions"><button id="submit" type="submit" disabled>View my certificate</button></div>
@@ -47,7 +47,7 @@
 <script>
 (function(){
   'use strict';
-  var $=function(id){return document.getElementById(id);},session=null,blobUrl='',timer=null,version=0,allTeams=[];
+  var $=function(id){return document.getElementById(id);},session=null,blobUrl='',timer=null,version=0,allTeams=[],selectedTeam='',teamMatches=[],activeTeam=-1;
   function text(id,value){$(id).textContent=value;}
   function error(id,msg){text(id,msg);$(id).classList.remove('hidden');$(id).focus();}
   function clear(id){text(id,'');$(id).classList.add('hidden');}
@@ -62,26 +62,37 @@
     var old=session;session=null;version++;clearTimeout(timer);releaseFile();$('surname').value='';$('person').value='';$('loadFile').disabled=false;text('loadFile','Prepare download');$('submit').disabled=!$('person').options.length;show('form');if(old)call('logout',[old.token],function(){},function(){});if(expired)error('formError','Your session has expired. Please verify your details again.');
   }
   function searchKey(value){return String(value||'').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/\s+/g,' ').trim().toLowerCase();}
+  function closeTeams(){$('teamList').classList.add('hidden');$('team').setAttribute('aria-expanded','false');$('team').removeAttribute('aria-activedescendant');activeTeam=-1;}
+  function chooseTeam(t){selectedTeam=t.id;$('team').value=t.name+' · '+t.track;loadParticipants();$('team').focus();closeTeams();}
   function filterTeams(){
-    var previous=$('team').value,query=searchKey($('teamSearch').value),matches=allTeams.filter(function(t){return searchKey(t.name).indexOf(query)!==-1;});
-    $('team').replaceChildren(option('','Select a team'));matches.forEach(function(t){$('team').appendChild(option(t.id,t.name+' · '+t.track));});$('team').disabled=!matches.length;
-    if(previous&&matches.some(function(t){return t.id===previous;}))$('team').value=previous;
-    else if(previous){version++;$('person').replaceChildren(option('','Select your name'));$('person').disabled=true;$('submit').disabled=true;$('surname').value='';}
-    text('loadStatus',!allTeams.length?'Certificates are not available yet. Please contact the organizing team.':matches.length?(query?matches.length+' of '+allTeams.length+' teams match':allTeams.length+' teams available'):'No teams match your search. Try another name or clear the search.');
+    var query=selectedTeam?'':searchKey($('team').value);activeTeam=-1;$('team').removeAttribute('aria-activedescendant');
+    teamMatches=allTeams.filter(function(t){return searchKey(t.name).indexOf(query)!==-1;});$('teamList').replaceChildren();
+    teamMatches.forEach(function(t,i){var b=document.createElement('button');b.type='button';b.id='team-option-'+i;b.setAttribute('role','option');b.setAttribute('tabindex','-1');b.setAttribute('aria-selected',String(t.id===selectedTeam));b.textContent=t.name+' · '+t.track;b.onmousedown=function(e){e.preventDefault();};b.onclick=function(){chooseTeam(t);};$('teamList').appendChild(b);});
+    if(!teamMatches.length){var empty=document.createElement('div');empty.className='team-empty';empty.textContent='No teams found';$('teamList').appendChild(empty);}
+    $('teamList').classList.remove('hidden');$('team').setAttribute('aria-expanded','true');
+    text('loadStatus',teamMatches.length?(query?teamMatches.length+' of '+allTeams.length+' teams match':allTeams.length+' teams available'):'No teams match your search. Try another name or clear the search.');
   }
-  $('teamSearch').oninput=filterTeams;
-  call('getTeams',[],function(teams){
-    allTeams=teams;$('teamSearch').disabled=!teams.length;filterTeams();
-  },function(msg){text('loadStatus','Unable to load teams');error('formError',msg);});
-  $('team').onchange=function(){
-    var team=this.value;version++;$('person').replaceChildren(option('','Select your name'));$('person').disabled=true;$('submit').disabled=true;$('surname').value='';clear('formError');if(!team)return;
-    call('getParticipants',[team],function(people){if($('team').value!==team)return;people.forEach(function(p){$('person').appendChild(option(p.id,p.name));});$('person').disabled=!people.length;$('submit').disabled=!people.length;if(!people.length)error('formError','No available certificates for this team. Please contact the organizing team.');},function(msg){if($('team').value===team)error('formError',msg);});
+  $('team').oninput=function(){selectedTeam='';version++;$('person').replaceChildren(option('','Select your name'));$('person').disabled=true;$('submit').disabled=true;$('surname').value='';filterTeams();};
+  $('team').onfocus=filterTeams;$('team').onclick=filterTeams;
+  $('team').onkeydown=function(e){
+    if(e.key==='Escape'){e.preventDefault();closeTeams();return;}if(e.key==='Tab'){closeTeams();return;}
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();if($('teamList').classList.contains('hidden'))filterTeams();if(!teamMatches.length)return;activeTeam=(activeTeam+(e.key==='ArrowDown'?1:-1)+teamMatches.length)%teamMatches.length;
+      Array.from($('teamList').children).forEach(function(b,i){b.classList.toggle('active-option',i===activeTeam);});var current=$('team-option-'+activeTeam);$('team').setAttribute('aria-activedescendant',current.id);current.scrollIntoView({block:'nearest'});return;}
+    if(e.key==='Enter'&&!$('teamList').classList.contains('hidden')){e.preventDefault();if(activeTeam>=0)chooseTeam(teamMatches[activeTeam]);}
   };
+  document.addEventListener('click',function(e){if(!$('teamPicker').contains(e.target))closeTeams();});
+  call('getTeams',[],function(teams){
+    allTeams=teams;$('team').disabled=!teams.length;text('loadStatus',teams.length?teams.length+' teams available':'Certificates are not available yet. Please contact the organizing team.');
+  },function(msg){text('loadStatus','Unable to load teams');error('formError',msg);});
+  function loadParticipants(){
+    var team=selectedTeam;version++;$('person').replaceChildren(option('','Select your name'));$('person').disabled=true;$('submit').disabled=true;$('surname').value='';clear('formError');if(!team)return;
+    call('getParticipants',[team],function(people){if(selectedTeam!==team)return;people.forEach(function(p){$('person').appendChild(option(p.id,p.name));});$('person').disabled=!people.length;$('submit').disabled=!people.length;if(!people.length)error('formError','No available certificates for this team. Please contact the organizing team.');},function(msg){if(selectedTeam===team)error('formError',msg);});
+  }
   $('certificateForm').onsubmit=function(e){
-    e.preventDefault();clear('formError');var team=$('team').value,id=$('person').value,surname=$('surname').value.trim();
+    e.preventDefault();clear('formError');var team=selectedTeam,id=$('person').value,surname=$('surname').value.trim();
     if(!team||!id||!surname){error('formError','Please select your team and name, and enter your surname.');return;}
-    var request=++version;$('submit').disabled=true;$('teamSearch').disabled=true;$('team').disabled=true;$('person').disabled=true;text('submit','Verifying…');
-    function done(){text('submit','View my certificate');$('submit').disabled=false;$('teamSearch').disabled=false;$('team').disabled=false;$('person').disabled=false;$('surname').value='';}
+    closeTeams();var request=++version;$('submit').disabled=true;$('team').disabled=true;$('person').disabled=true;text('submit','Verifying…');
+    function done(){text('submit','View my certificate');$('submit').disabled=false;$('team').disabled=false;$('person').disabled=false;$('surname').value='';}
     call('verifyParticipant',[team,id,surname],function(res){if(request!==version)return;done();if(!res.ok){error('formError',res.message);return;}session=res;releaseFile();clear('downloadError');text('resultName',res.name);text('resultTeam',res.team+' · '+res.track);text('resultRound',res.round);text('downloadStatus','Your session expires after 10 minutes. Only your own certificate is available.');$('loadFile').disabled=false;text('loadFile','Prepare download');show('result');clearTimeout(timer);timer=setTimeout(function(){reset(true);},Math.max(0,res.expiresAt-Date.now()));},function(msg){if(request!==version)return;done();error('formError',msg);});
   };
   $('loadFile').onclick=function(){
