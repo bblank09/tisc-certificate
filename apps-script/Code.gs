@@ -23,9 +23,10 @@ function rows_(){
   });
 }
 function eligible_(r){return r&&r.DataCheck==='VERIFIED_MAPPING'&&!r.Issue&&r.Approved==='YES'&&r.DriveCheck==='PATH_SIZE_MATCH'&&
-  ['RecipientName','RecipientEmail','Team','Round','Track','CertificatePath','DriveFileId'].every(h=>!!r[h])&&/^[a-f0-9]{64}$/i.test(r.FileSHA256)&&!!surname_(r.RecipientName);}
+  ['RecipientName','RecipientEmail','Team','Round','Track','CertificatePath','DriveFileId'].every(h=>!!r[h])&&/^[a-f0-9]{64}$/i.test(r.FileSHA256)&&(verificationMethod_(r)==='email'?/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(r.RecipientEmail):!!surname_(r.RecipientName));}
+function verificationMethod_(r){return r.CertificateId==='TISC26-CERT-0250'&&norm_(r.RecipientName)==='phuwasid'?'email':'surname';}
 function surname_(name){const parts=String(name||'').trim().split(/\s+/);return parts.length>1?parts[parts.length-1]:'';}
-function publicName_(name){const p=String(name).trim().split(/\s+/);return p[0]+' '+surname_(name).charAt(0).toUpperCase()+'.';}
+function publicName_(name){const p=String(name).trim().split(/\s+/);return surname_(name)?p[0]+' '+surname_(name).charAt(0).toUpperCase()+'.':p[0];}
 function teamKey_(r){return hash_(JSON.stringify([r.Team,r.Track]));}
 function fingerprint_(r){return hash_(JSON.stringify(PORTAL_HEADERS.map(h=>[h,r[h]])));}
 function fail_(){return{ok:false,message:'Unable to verify your details or this certificate is not available. Please check your information or contact the organizing team.'};}
@@ -37,7 +38,7 @@ function getTeams(){
 }
 function getParticipants(team){
   if(!enabled_()||typeof team!=='string'||!/^[a-f0-9]{64}$/.test(team))return[];
-  return rows_().filter(r=>eligible_(r)&&teamKey_(r)===team).map(r=>({id:r.CertificateId,name:publicName_(r.RecipientName)}));
+  return rows_().filter(r=>eligible_(r)&&teamKey_(r)===team).map(r=>({id:r.CertificateId,name:publicName_(r.RecipientName),verificationMethod:verificationMethod_(r)}));
 }
 
 function verifyParticipant(team,id,surname){
@@ -48,10 +49,11 @@ function verifyParticipant(team,id,surname){
     let counter;try{counter=JSON.parse(props_().getProperty(throttleKey)||'null');}catch(e){counter=null;}
     const now=Date.now();if(!counter||counter.until<=now)counter={count:0,until:now+PORTAL.lockSeconds*1000};
     if(counter.count>=PORTAL.maxAttempts)return fail_();
-    const correctShape=validId&&typeof team==='string'&&/^[a-f0-9]{64}$/.test(team)&&typeof surname==='string'&&surname.length<=100&&norm_(surname);
+    const correctShape=validId&&typeof team==='string'&&/^[a-f0-9]{64}$/.test(team)&&typeof surname==='string'&&surname.length<=254&&norm_(surname);
     const matches=correctShape?rows_().filter(r=>r.CertificateId===id&&teamKey_(r)===team&&eligible_(r)):[];
     const person=matches.length===1?matches[0]:null;
-    if(!person||norm_(surname_(person.RecipientName))!==norm_(surname)){
+    const expected=person?(verificationMethod_(person)==='email'?person.RecipientEmail:surname_(person.RecipientName)):'';
+    if(!person||!expected||norm_(expected)!==norm_(surname)){
       counter.count++;props_().setProperty(throttleKey,JSON.stringify(counter));return fail_();
     }
     props_().deleteProperty(throttleKey);
