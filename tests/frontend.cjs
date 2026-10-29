@@ -1,0 +1,20 @@
+const {chromium}=require('playwright');const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:1000},acceptDownloads:true});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const mock=`window.calls=[];window.google={script:{run:(function(){let ok,bad;const r={withSuccessHandler(fn){ok=fn;return r;},withFailureHandler(fn){bad=fn;return r;}};for(const name of ['getTeams','getParticipants','verifyParticipant','downloadCertificate','logout'])r[name]=function(...args){window.calls.push({name,args});const done=ok;setTimeout(()=>{if(name==='getTeams')done([{id:'a'.repeat(64),name:'Demo Team',track:'Track A'}]);if(name==='getParticipants')done([{id:'TISC26-CERT-0001',name:'Jane S.'}]);if(name==='verifyParticipant')done(args[2]==='Smith'?{ok:true,token:'b'.repeat(64),expiresAt:Date.now()+600000,name:'Jane Smith',team:'Demo Team',track:'Track A',round:'Participant'}:{ok:false,message:'Verification failed.'});if(name==='downloadCertificate')done({ok:true,fileName:'Jane Smith.png',mimeType:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMu0AAAAASUVORK5CYII='});if(name==='logout')done({ok:true});},0);};return r;})()}};`;
+ const app=fs.readFileSync(path.join(__dirname,'../apps-script/App.html'),'utf8').replace('<body>','<body><script>'+mock+'</script>');
+ await page.setContent(app,{waitUntil:'load'});await page.waitForFunction(()=>!document.getElementById('team').disabled);
+ await page.selectOption('#team','a'.repeat(64));await page.waitForFunction(()=>!document.getElementById('person').disabled);await page.selectOption('#person','TISC26-CERT-0001');
+ await page.fill('#surname','Wrong');await page.click('#submit');await page.locator('#formError:not(.hidden)').waitFor();assert.match(await page.textContent('#formError'),/failed/);
+ await page.fill('#surname','Smith');await page.click('#submit');await page.locator('#result:not(.hidden)').waitFor();assert.equal(await page.textContent('#resultName'),'Jane Smith');
+ await page.click('#loadFile');await page.locator('#saveFile:not(.hidden)').waitFor();assert.match(await page.getAttribute('#saveFile','href'),/^blob:/);
+ const [download]=await Promise.all([page.waitForEvent('download'),page.click('#saveFile')]);assert.equal(download.suggestedFilename(),'Jane Smith.png');
+ fs.mkdirSync(path.join(__dirname,'../screenshots'),{recursive:true});await page.screenshot({path:path.join(__dirname,'../screenshots/desktop-result.png'),fullPage:true});
+ await page.click('#again');await page.locator('#form:not(.hidden)').waitFor();assert.equal(await page.inputValue('#surname'),'');
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(__dirname,'../screenshots/mobile-login.png'),fullPage:true});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'mobile horizontal overflow');
+ assert.deepEqual(errors,[]);console.log('PASS UI: wrong surname, successful login, authenticated Blob download, filename, logout, desktop/mobile, no JS errors');
+ await page.setContent(fs.readFileSync(path.join(__dirname,'../index.html'),'utf8').replace('<script src="config.js"></script>','<script>window.TISC_CERTIFICATE_APP_URL="";</script>'));assert.equal(await page.locator('iframe').count(),0);console.log('PASS wrapper: missing new deployment URL fails closed');
+ await browser.close();
+})().catch(e=>{console.error(e);process.exit(1);});

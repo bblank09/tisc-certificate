@@ -1,0 +1,35 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm'),fs=require('node:fs'),crypto=require('node:crypto');
+const codePath=__dirname+'/../apps-script/Code.gs';
+function fixture(){
+ let now=1_800_000_000_000;const props=new Map([['PORTAL_ENABLED','YES'],['CERTIFICATE_SHEET_ID','test-sheet'],['CERTIFICATE_ROOT_ID','test-root']]),cache=new Map(),logs=[];
+ const bytes=[1,2,3],hash=crypto.createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+ const headers=['CertificateId','RecipientName','RecipientEmail','Round','Track','CertificatePath','DataCheck','Issue','Approved','SendStatus','SentAt','ProviderMessageId','SourceRefs','CleanNotes','FileSHA256','SendGate','Team','DriveFileId','DriveFileURL','DriveCheck'];
+ function row(id,name,team,status='VERIFIED_MAPPING',approved='YES'){return [id,name,'private@example.com','Participant','Track A',`TISC Certificate/Participant/A-Participant/${name}.png`,status,'',approved,'PENDING','','','','',hash,'',team,'private-file-'+id,'private-url','PATH_SIZE_MATCH'];}
+ const jane=row('TISC26-CERT-0001','Jane van Smith','Team One');const other=row('TISC26-CERT-0002','John Jones','Team Two');const held=row('TISC26-CERT-0003','Held User','Team One','HOLD');const review=row('TISC26-CERT-0004','Review User','Team One','REVIEW');const unapproved=row('TISC26-CERT-0005','No Approval','Team One','VERIFIED_MAPPING','NO');
+ const grid=[...Array.from({length:7},()=>[]),headers,jane,other,held,review,unapproved];
+ const sheet={getLastRow:()=>grid.length,getLastColumn:()=>headers.length,getRange:(r,c,n,m)=>({getDisplayValues:()=>Array.from({length:n},(_,i)=>Array.from({length:m},(_,j)=>String(grid[r-1+i]?.[c-1+j]??'')))})};
+ const book={getId:()=> 'test-sheet',getSheetByName:n=>n==='Email Send'?sheet:null};
+ const iter=a=>{let i=0;return{hasNext:()=>i<a.length,next:()=>a[i++]};};
+ const root={getId:()=> 'test-root'};
+ const category={getName:()=> 'Participant',getParents:()=>iter([root])};const track={getName:()=> 'A-Participant',getParents:()=>iter([category])};
+ const blob={getBytes:()=>bytes};let fileName='Jane van Smith.png';
+ const file={getName:()=>fileName,getMimeType:()=> 'image/png',isTrashed:()=>false,getSize:()=>bytes.length,getParents:()=>iter([track]),getBlob:()=>blob};
+ class FakeDate extends Date{constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}}
+ const sandbox={console,Date:FakeDate,SpreadsheetApp:{openById:()=>book},DriveApp:{getFileById:()=>file},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},Session:{getActiveUser:()=>({getEmail:()=> ''}),getEffectiveUser:()=>({getEmail:()=> 'owner@example.com'})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k)||null,setProperty(k,v){props.set(k,String(v));},deleteProperty:k=>props.delete(k)})},CacheService:{getScriptCache:()=>({get:k=>{const x=cache.get(k);return x&&x.expires>now?x.value:null;},put:(k,v,ttl)=>cache.set(k,{value:v,expires:now+ttl*1000}),remove:k=>cache.delete(k)})},Utilities:{DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(alg,v)=>[...crypto.createHash('sha256').update(typeof v==='string'?v:Buffer.from(v)).digest()],getUuid:()=>crypto.randomUUID(),base64Encode:v=>Buffer.from(v).toString('base64')},};
+ const ctx=vm.createContext(sandbox);if(fs.existsSync(codePath))vm.runInContext(fs.readFileSync(codePath,'utf8'),ctx);
+ const run=s=>vm.runInContext(s,ctx);const teams=()=>JSON.parse(JSON.stringify(run('getTeams()')));const login=(surname='Smith',id=jane[0],team)=>{ctx.input=[team||teams()[0].id,id,surname];return run('verifyParticipant(...input)');};
+ return{run,ctx,props,cache,grid,jane,other,held,teams,login,logs,setName:n=>fileName=n,advance:ms=>now+=ms};
+}
+test('public roster is masked and omits private data/Drive IDs',()=>{const f=fixture();assert.equal(f.run('typeof getTeams'),'function');const teams=f.teams();assert.equal(teams.length,2);assert.notEqual(teams[0].id,'Team One');f.ctx.team=teams[0].id;const p=f.run('getParticipants(team)');assert.equal(p.length,1);assert.equal(p[0].name,'Jane S.');assert.doesNotMatch(JSON.stringify(p),/private|Smith|@|DriveFileId/);});
+test('valid login grants short lived token, downloaded PNG has no Drive URL',()=>{const f=fixture(),r=f.login();assert.equal(r.ok,true);assert.ok(r.token);f.ctx.token=r.token;const d=f.run('downloadCertificate(token)');assert.equal(d.ok,true);assert.equal(d.base64,'AQID');assert.equal(d.fileName,'Jane van Smith.png');assert.doesNotMatch(JSON.stringify(d),/private-file|drive.google|private@example/);});
+test('wrong surname / cross team / unknown ID denied',()=>{const f=fixture();assert.equal(f.login('wrong').ok,false);assert.equal(f.login('Jones',f.other[0],f.teams()[0].id).ok,false);assert.equal(f.login('Smith','TISC26-CERT-9999').ok,false);});
+test('NFKC/case/whitespace surname normalization preserves old behavior',()=>{const f=fixture();assert.equal(f.login('  ＳＭＩＴＨ  ').ok,true);assert.equal(f.login('van Smith').ok,false);});
+test('five failed attempts lock the identity even for the correct surname',()=>{const f=fixture();for(let i=0;i<5;i++)assert.equal(f.login('bad').ok,false);assert.equal(f.login().ok,false);f.advance(601000);assert.equal(f.login().ok,true);});
+test('download without token or expired token fails',()=>{const f=fixture();assert.equal(f.run('downloadCertificate("").ok'),false);const r=f.login();f.ctx.token=r.token;f.advance(601000);assert.equal(f.run('downloadCertificate(token).ok'),false);});
+test('edited email/team/file after verification invalidates session',()=>{for(const i of [2,16,17]){const f=fixture();const r=f.login();f.ctx.token=r.token;f.jane[i]='changed';assert.equal(f.run('downloadCertificate(token).ok'),false);}});
+test('revoked approval or REVIEW after login denies download',()=>{for(const [i,v] of [[8,'NO'],[6,'REVIEW'],[7,'Unresolved']]){const f=fixture();f.ctx.token=f.login().token;f.jane[i]=v;assert.equal(f.run('downloadCertificate(token).ok'),false);}});
+test('file name and hash mismatch never returns bytes',()=>{for(const kind of ['name','hash']){const f=fixture();f.ctx.token=f.login().token;if(kind==='name')f.setName('Other.png');else f.jane[14]='0'.repeat(64);assert.equal(f.run('downloadCertificate(token).ok'),false);}});
+test('portal disabled fails closed',()=>{const f=fixture(),team=f.teams()[0].id;f.props.delete('PORTAL_ENABLED');assert.equal(f.teams().length,0);assert.equal(f.login('Smith',f.jane[0],team).ok,false);});
+test('public RPC cannot enable portal or access admin initialization',()=>{const f=fixture();assert.throws(()=>f.run('enablePortal()'),/owner|Owner|เจ้าของ/);});
+test('duplicate certificate ID fails closed',()=>{const f=fixture();f.grid.push([...f.jane]);assert.throws(()=>f.teams(),/Duplicate/);});
+test('logout invalidates session',()=>{const f=fixture();f.ctx.token=f.login().token;f.run('logout(token)');assert.equal(f.run('downloadCertificate(token).ok'),false);});
