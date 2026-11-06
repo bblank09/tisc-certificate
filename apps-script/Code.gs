@@ -6,7 +6,7 @@ function doGet(){return HtmlService.createHtmlOutputFromFile('App').setTitle('TI
 function props_(){return PropertiesService.getScriptProperties();}
 function enabled_(){return props_().getProperty('PORTAL_ENABLED')==='YES';}
 function norm_(v){return String(v||'').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/\s+/g,' ').trim().toLowerCase();}
-function hash_(value){return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,value).map(b=>('0'+((b+256)%256).toString(16)).slice(-2)).join('');}
+function hash_(value){const bytes=typeof value==='string'?Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,value,Utilities.Charset.UTF_8):Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,value);return bytes.map(b=>('0'+((b+256)%256).toString(16)).slice(-2)).join('');}
 function settings_(){const p=props_(),sheetId=p.getProperty('CERTIFICATE_SHEET_ID'),rootId=p.getProperty('CERTIFICATE_ROOT_ID');if(!sheetId||!rootId)throw new Error('Portal configuration incomplete');return{sheetId,rootId};}
 function rows_(){
   const s=SpreadsheetApp.openById(settings_().sheetId).getSheetByName(PORTAL.sheetName);if(!s)throw new Error('Certificate sheet missing');
